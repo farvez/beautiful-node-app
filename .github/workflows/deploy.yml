@@ -20,11 +20,18 @@ jobs:
     - name: Install dependencies
       run: npm install
 
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
     - name: Login to AWS ECR
-      if: env.USE_ECR == 'true'  # Set USE_ECR as a repo variable if using ECR
+      id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
       with:
-        registry-type: public  # Or private
+        registry-type: private
 
     - name: Build, tag, and push Docker image
       env:
@@ -32,8 +39,9 @@ jobs:
         IMAGE_TAG: latest
       run: |
         docker build -t $REPO_NAME:$IMAGE_TAG .
-        docker tag $REPO_NAME:$IMAGE_TAG ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/$REPO_NAME:$IMAGE_TAG
-        docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/$REPO_NAME:$IMAGE_TAG
+        ECR_URL=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/$REPO_NAME:$IMAGE_TAG
+        docker tag $REPO_NAME:$IMAGE_TAG $ECR_URL
+        docker push $ECR_URL
 
     - name: Deploy to EC2 via SSH
       uses: appleboy/ssh-action@master
@@ -42,7 +50,8 @@ jobs:
         username: ${{ secrets.EC2_USER }}
         key: ${{ secrets.EC2_SSH_KEY }}
         script: |
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
           docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/beautiful-node-app:latest
-          docker stop $(docker ps -q --filter ancestor=beautiful-node-app:latest) || true
-          docker rm $(docker ps -a -q --filter ancestor=beautiful-node-app:latest) || true
-          docker run -d -p 80:3000 beautiful-node-app:latest
+          docker stop $(docker ps -q --filter ancestor=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/beautiful-node-app:latest) || true
+          docker rm $(docker ps -a -q --filter ancestor=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/beautiful-node-app:latest) || true
+          docker run -d -p 80:3000 ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/beautiful-node-app:latest
