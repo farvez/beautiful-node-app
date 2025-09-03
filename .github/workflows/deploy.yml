@@ -1,0 +1,48 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: 18
+
+    - name: Install dependencies
+      run: npm install
+
+    - name: Login to AWS ECR
+      if: env.USE_ECR == 'true'  # Set USE_ECR as a repo variable if using ECR
+      uses: aws-actions/amazon-ecr-login@v1
+      with:
+        registry-type: public  # Or private
+
+    - name: Build, tag, and push Docker image
+      env:
+        REPO_NAME: beautiful-node-app
+        IMAGE_TAG: latest
+      run: |
+        docker build -t $REPO_NAME:$IMAGE_TAG .
+        docker tag $REPO_NAME:$IMAGE_TAG ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/$REPO_NAME:$IMAGE_TAG
+        docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/$REPO_NAME:$IMAGE_TAG
+
+    - name: Deploy to EC2 via SSH
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USER }}
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+          docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/beautiful-node-app:latest
+          docker stop $(docker ps -q --filter ancestor=beautiful-node-app:latest) || true
+          docker rm $(docker ps -a -q --filter ancestor=beautiful-node-app:latest) || true
+          docker run -d -p 80:3000 beautiful-node-app:latest
